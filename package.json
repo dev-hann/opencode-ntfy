@@ -1,0 +1,31 @@
+{
+  "name": "opencode-ntfy",
+  "version": "0.1.0",
+  "description": "Send push notifications to your phone via ntfy when OpenCode sessions complete, error, or need attention",
+  "main": "src/index.ts",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "ntfy",
+    "notification",
+    "push-notification"
+  ],
+  "author": "hann <dev-hann>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dev-hann/opencode-ntfy"
+  },
+  "bugs": {
+    "url": "https://github.com/dev-hann/opencode-ntfy/issues"
+  },
+  "homepage": "https://github.com/dev-hann/opencode-ntfy#readme",
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  }
+}
