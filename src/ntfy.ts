@@ -58,5 +58,5 @@ export async function sendNtfy(options: NtfyOptions): Promise<boolean> {
 }
 
 function escapeShell(str: string): string {
-  return str.replace(/["\\$`!]/g, "")
+  return str.replace(/["\\$`!]/g, "").replace(/[\r\n]/g, " ")
 }

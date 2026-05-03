@@ -20,6 +20,16 @@ export interface NtfyConfig {
   messages: Partial<Record<EventType, string>>
 }
 
+export interface MessageVars {
+  sessionTitle?: string | null
+  projectName?: string | null
+  errorDetail?: string | null
+  changeSummary?: string | null
+  durationFormatted?: string | null
+  permissionDetail?: string | null
+  questionText?: string | null
+}
+
 const DEFAULT_CONFIG: NtfyConfig = {
   topic: "",
   server: "https://ntfy.sh",
@@ -47,11 +57,11 @@ const DEFAULT_CONFIG: NtfyConfig = {
     subagent_complete: ["white_check_mark"],
   },
   messages: {
-    complete: "Session completed: {sessionTitle}",
-    error: "Session error: {sessionTitle}",
-    permission: "Permission required: {sessionTitle}",
-    question: "Session has a question: {sessionTitle}",
-    subagent_complete: "Subagent completed: {sessionTitle}",
+    complete: "Session completed: {sessionTitle}\n{durationFormatted}\n{changeSummary}",
+    error: "Session error: {sessionTitle}\n{errorDetail}",
+    permission: "Permission required: {sessionTitle}\n{permissionDetail}",
+    question: "Question: {sessionTitle}\n{questionText}",
+    subagent_complete: "Subagent completed: {sessionTitle}\n{durationFormatted}\n{changeSummary}",
   },
 }
 
@@ -97,15 +107,94 @@ export function getTags(config: NtfyConfig, eventType: EventType): string[] {
   return config.tags[eventType] ?? []
 }
 
+export function formatDuration(createdMs: number, updatedMs: number): string {
+  const diffMs = Math.max(0, updatedMs - createdMs)
+  if (!Number.isFinite(diffMs) || diffMs < 1000) return ""
+  const totalSeconds = Math.floor(diffMs / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `Duration: ${hours}h ${minutes}m ${seconds}s`
+  if (minutes > 0) return `Duration: ${minutes}m ${seconds}s`
+  return `Duration: ${seconds}s`
+}
+
+export function formatChangeSummary(
+  summary: { additions?: number; deletions?: number; files?: number } | null | undefined
+): string {
+  if (!summary) return ""
+  const additions = summary.additions ?? 0
+  const deletions = summary.deletions ?? 0
+  const files = summary.files ?? 0
+  const parts: string[] = []
+  if (additions > 0) parts.push(`+${additions}`)
+  if (deletions > 0) parts.push(`-${deletions}`)
+  if (parts.length === 0) return ""
+  return `${parts.join(" ")} across ${files} file${files !== 1 ? "s" : ""}`
+}
+
+export function formatErrorDetail(
+  error: { name?: string; data?: { message?: string; statusCode?: number } } | null | undefined
+): string {
+  if (!error) return ""
+  const name = error.name ?? ""
+  const message = error.data?.message ?? ""
+  const statusCode = error.data?.statusCode
+  if (!name && !message) return ""
+  const detail = name && message ? `${name}: ${message}` : (name || message)
+  return statusCode ? `${detail} (${statusCode})` : detail
+}
+
+export function formatPermissionDetail(
+  type: string | null | undefined,
+  pattern: string | string[] | null | undefined,
+  title: string | null | undefined
+): string {
+  const parts: string[] = []
+  if (title) parts.push(title)
+  else if (type) parts.push(`[${type}]`)
+  if (pattern) {
+    const patternStr = Array.isArray(pattern) ? pattern.join(", ") : pattern
+    if (patternStr) parts.push(patternStr)
+  }
+  return parts.join(" ")
+}
+
+const PLACEHOLDER_KEYS = [
+  "sessionTitle",
+  "projectName",
+  "errorDetail",
+  "changeSummary",
+  "durationFormatted",
+  "permissionDetail",
+  "questionText",
+] as const
+
+const PLACEHOLDER_RE = new RegExp(
+  `\\{(${PLACEHOLDER_KEYS.join("|")})\\}`,
+  "g"
+)
+
 export function getMessage(
   config: NtfyConfig,
   eventType: EventType,
-  vars?: { sessionTitle?: string | null; projectName?: string | null }
+  vars?: MessageVars
 ): string {
   const template = config.messages[eventType] ?? ""
+  const values: Record<string, string> = {
+    sessionTitle: vars?.sessionTitle ?? "",
+    projectName: vars?.projectName ?? "",
+    errorDetail: vars?.errorDetail ?? "",
+    changeSummary: vars?.changeSummary ?? "",
+    durationFormatted: vars?.durationFormatted ?? "",
+    permissionDetail: vars?.permissionDetail ?? "",
+    questionText: vars?.questionText ?? "",
+  }
   return template
-    .replace(/\{sessionTitle\}/g, vars?.sessionTitle ?? "")
-    .replace(/\{projectName\}/g, vars?.projectName ?? "")
-    .replace(/\s*[:\-|]\s*$/u, "")
+    .replace(PLACEHOLDER_RE, (_, key: string) => values[key] ?? "")
+    .replace(/(?:\r?\n){2,}/g, "\n")
+    .split("\n")
+    .map((line: string) => line.replace(/\s*[:\-|]\s*$/u, ""))
+    .join("\n")
     .trim()
 }

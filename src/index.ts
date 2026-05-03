@@ -7,8 +7,13 @@ import {
   getPriority,
   getTags,
   getMessage,
+  formatDuration,
+  formatChangeSummary,
+  formatErrorDetail,
+  formatPermissionDetail,
   type EventType,
   type NtfyConfig,
+  type MessageVars,
 } from "./config"
 
 const IDLE_COMPLETE_DELAY_MS = 350
@@ -17,6 +22,7 @@ const pendingIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const sessionIdleSequence = new Map<string, number>()
 const sessionErrorSuppressionAt = new Map<string, number>()
 const subagentSessionIds = new Set<string>()
+const recentPermissionIds = new Set<string>()
 
 type UnknownRecord = Record<string, unknown>
 
@@ -71,6 +77,8 @@ function getSessionLifecycleInfo(event: unknown): SessionLifecycleInfo {
 interface SessionInfo {
   isChild: boolean
   title: string | null
+  summary?: { additions?: number; deletions?: number; files?: number }
+  time?: { created: number; updated: number }
 }
 
 async function getSessionInfo(
@@ -79,9 +87,13 @@ async function getSessionInfo(
 ): Promise<SessionInfo> {
   try {
     const response = await client.session.get({ path: { id: sessionID } })
-    const title =
-      typeof response.data?.title === "string" ? response.data.title : null
-    return { isChild: !!response.data?.parentID, title }
+    const data = response.data
+    return {
+      isChild: !!data?.parentID,
+      title: typeof data?.title === "string" ? data.title : null,
+      summary: data?.summary,
+      time: data?.time,
+    }
   } catch {
     return { isChild: false, title: null }
   }
@@ -130,7 +142,7 @@ async function notifyNtfy(
   config: NtfyConfig,
   eventType: EventType,
   projectName: string | null,
-  sessionTitle?: string | null
+  vars?: MessageVars
 ): Promise<void> {
   if (!config.topic) {
     if (!configWarningShown) {
@@ -145,7 +157,7 @@ async function notifyNtfy(
   if (!isEventEnabled(config, eventType)) return
 
   const title = projectName ? `OpenCode (${projectName})` : "OpenCode"
-  const message = getMessage(config, eventType, { sessionTitle, projectName })
+  const message = getMessage(config, eventType, { ...vars, projectName })
   const priority = getPriority(config, eventType)
   const tags = getTags(config, eventType)
 
@@ -172,20 +184,30 @@ async function processSessionIdle(
   if (!hasCurrentSessionIdleSequence(sessionID, sequence)) return
   if (shouldSuppressSessionIdle(sessionID)) return
 
-  if (subagentSessionIds.has(sessionID)) {
-    await notifyNtfy(config, "subagent_complete", projectName)
-    return
-  }
+  const isSubagent = subagentSessionIds.has(sessionID)
+  const eventType: EventType = isSubagent ? "subagent_complete" : "complete"
+
+  if (!isEventEnabled(config, eventType)) return
 
   const sessionInfo = await getSessionInfo(client, sessionID)
 
   if (!hasCurrentSessionIdleSequence(sessionID, sequence)) return
   if (shouldSuppressSessionIdle(sessionID)) return
 
-  const eventType: EventType = sessionInfo.isChild
+  const resolvedEventType: EventType = isSubagent || sessionInfo.isChild
     ? "subagent_complete"
     : "complete"
-  await notifyNtfy(config, eventType, projectName, sessionInfo.title)
+
+  const durationFormatted = sessionInfo.time
+    ? formatDuration(sessionInfo.time.created, sessionInfo.time.updated)
+    : null
+  const changeSummary = formatChangeSummary(sessionInfo.summary ?? null)
+
+  await notifyNtfy(config, resolvedEventType, projectName, {
+    sessionTitle: sessionInfo.title,
+    durationFormatted,
+    changeSummary,
+  })
 }
 
 function scheduleSessionIdle(
@@ -250,7 +272,19 @@ export const NtfyPlugin: Plugin = async ({ client, directory }) => {
       }
 
       if ((event as any).type === "permission.asked") {
-        await notifyNtfy(config, "permission", projectName)
+        const id = (event as any).properties?.id
+        if (id && recentPermissionIds.has(id)) {
+          recentPermissionIds.delete(id)
+        } else {
+          const props = (event as any).properties
+          await notifyNtfy(config, "permission", projectName, {
+            permissionDetail: formatPermissionDetail(
+              props?.permission ?? null,
+              props?.patterns ?? null,
+              props?.metadata?.title ?? null
+            ),
+          })
+        }
       }
 
       if (event.type === "session.idle") {
@@ -265,24 +299,34 @@ export const NtfyPlugin: Plugin = async ({ client, directory }) => {
       if (event.type === "session.error") {
         const sessionID = getSessionIDFromEvent(event)
         markSessionError(sessionID)
-        const isCancelled =
-          (event as any).properties?.error?.name === "MessageAbortedError"
+        const error = (event as any).properties?.error
+        const isCancelled = error?.name === "MessageAbortedError"
         if (!isCancelled) {
           let sessionTitle: string | null = null
           if (sessionID) {
             const info = await getSessionInfo(client, sessionID)
             sessionTitle = info.title
           }
-          await notifyNtfy(config, "error", projectName, sessionTitle)
+          await notifyNtfy(config, "error", projectName, {
+            sessionTitle,
+            errorDetail: formatErrorDetail(error ?? null),
+          })
         }
       }
     },
-    "permission.ask": async () => {
-      await notifyNtfy(config, "permission", projectName)
+    "permission.ask": async (input: any) => {
+      const id = input?.id
+      if (id) recentPermissionIds.add(id)
+      await notifyNtfy(config, "permission", projectName, {
+        permissionDetail: formatPermissionDetail(input?.type, input?.pattern, input?.title),
+      })
     },
-    "tool.execute.before": async (input: any) => {
+    "tool.execute.before": async (input: any, output: any) => {
       if (input.tool === "question") {
-        await notifyNtfy(config, "question", projectName)
+        const questionText = output?.args?.question ?? output?.args?.message ?? null
+        await notifyNtfy(config, "question", projectName, {
+          questionText,
+        })
       }
     },
   }

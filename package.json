@@ -20,8 +20,12 @@
     "url": "https://github.com/dev-hann/opencode-ntfy/issues"
   },
   "homepage": "https://github.com/dev-hann/opencode-ntfy#readme",
+  "scripts": {
+    "test": "bun test",
+    "test:watch": "bun test --watch"
+  },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=0.1.0"
+    "@opencode-ai/plugin": "^1.14.33"
   },
   "peerDependenciesMeta": {
     "@opencode-ai/plugin": {
